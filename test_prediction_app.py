@@ -202,3 +202,5 @@ def make_prediction():
 if __name__ == '__main__':
     model_rpn, model_classifier, config, graph = init()    
     app.run(host='0.0.0.0', port=8001, debug=True)
+
+    

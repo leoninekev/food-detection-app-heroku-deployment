@@ -8,11 +8,15 @@ from load import *
 import roi_helpers
 
 import cv2
-from scipy.misc import imsave, imread, imresize
+#from scipy.misc import imsave, imread, imresize
 
 from keras import backend as K
 from keras.layers import Input
 from keras.models import Model
+
+from keras.preprocessing.image import img_to_array#250619
+from PIL import Image#250619
+import io#250619
 
 import resnet as nn#290519
 import time
@@ -150,8 +154,26 @@ app = Flask(__name__)
 def index():
     return render_template('index.html')
 
-@app.route('/predict', methods=['POST'])
-def make_prediction():
+@app.route('/querry')#250619 try /querry?image-path=C:/train_on_gcloud/flask_experiments/3.jpg
+def querry_with_imagepath():
+    tick= time.time()
+    image_path= request.args.get('image-path')
+    file= open(image_path,'rb')
+    img= Image.open(io.BytesIO(file.read()))#250619
+    img= img_to_array(img)#250619
+    img= img[...,::-1]#140619 changed RGB(happening with scipy) to BGR(recommended by cv2 locally)
+    with graph.as_default():
+        #creates an object from b_plat class, performing preprocessing        
+        overhead = b_plate(img, config, model_rpn, model_classifier)#140619# added img #img, config, model_rpn, model_classifier)
+        [bounding_boxes,  probabilities, ratio] = overhead.preprocess()#140619 img)#outputs preprocessed outputs
+        results = overhead.postprocess(bounding_boxes, probabilities, ratio)
+    print('Done')
+    exe_time= time.time()-tick
+    label = {"filePath":image_path,"predictionTuples":results,"inferencingTime":exe_time}
+    return flask.jsonify(label)
+
+@app.route('/predict_button', methods=['POST'])
+def make_prediction_button():
     tick= time.time()    
     if request.method=='POST':
         file = request.files['image']
@@ -161,7 +183,10 @@ def make_prediction():
         
         if not file:
             return render_template('index.html', label="empty")
-        img= imread(file)
+        
+        img= Image.open(io.BytesIO(file.read()))#250619
+        img= img_to_array(img)#250619
+        #img= imread(file)#250619
         img= img[...,::-1]#140619 changed RGB(happening with scipy) to BGR(recommended by cv2 locally)
 
         if not file:

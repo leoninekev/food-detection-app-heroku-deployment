@@ -8,12 +8,12 @@ from load import *
 import roi_helpers
 
 import cv2
-#from scipy.misc import imsave, imread, imresize
 
 from keras import backend as K
 from keras.layers import Input
 from keras.models import Model
 
+from tensorflow.python.lib.io import file_io#020719
 from keras.preprocessing.image import img_to_array#250619
 from PIL import Image#250619
 import io#250619
@@ -154,7 +154,7 @@ app = Flask(__name__)
 def index():
     return render_template('index.html')
 
-@app.route('/querry')#250619 try /querry?image-path=C:/train_on_gcloud/flask_experiments/3.jpg
+@app.route('/querry-local')#300619 try try http://localhost:8001/querry-local?image-path=C:\food-detection-020719\3.jpg
 def querry_with_imagepath():
     tick= time.time()
     image_path= request.args.get('image-path')
@@ -171,6 +171,76 @@ def querry_with_imagepath():
     exe_time= time.time()-tick
     label = {"filePath":image_path,"predictionTuples":results,"inferencingTime":exe_time}
     return flask.jsonify(label)
+@app.route('/querry-curl', methods=['POST'])#300619@cmd try curl -X POST -F image=@3.jpg 'http://localhost:8001/querry-curl'
+def querry_with_curl():
+    tick= time.time()   
+
+    if request.method=='POST':
+        if request.files.get("image"):
+            file = request.files["image"]
+
+            filename= str(file)[:-17][15:]
+            filepath= os.path.join(os.getcwd(),filename)
+            
+            img= Image.open(io.BytesIO(file.read()))
+            img= img_to_array(img)#250619
+            img= img[...,::-1]
+            global graph#270619
+            with graph.as_default():
+                overhead = b_plate(img, config, model_rpn, model_classifier)#140619# added img #img, config, model_rpn, model_classifier)
+                [bounding_boxes,  probabilities, ratio] = overhead.preprocess()#140619 img)#outputs preprocessed outputs
+                results = overhead.postprocess(bounding_boxes, probabilities, ratio)
+            exe_time= time.time()-tick
+            label = {'fileName': filename,'filePath':filepath,"predictionTuples":results,"inferencingTime":exe_time}
+        return flask.jsonify(label)
+
+@app.route('/querry-gcs')#020719 try /querry-gcs?image=gs://train_on_gcloud/flask_experiments/3.jpg
+def querry_with_gcs_url():
+    tick= time.time()
+    image_url= request.args.get('image')
+    file = file_io.FileIO(image_url, mode='rb')
+    
+    img= Image.open(io.BytesIO(file.read()))#250619
+    img= img_to_array(img)#250619
+    img= img[...,::-1]#140619 changed RGB(happening with scipy) to BGR(recommended by cv2 locally)
+    with graph.as_default():
+        #creates an object from b_plat class, performing preprocessing        
+        overhead = b_plate(img, config, model_rpn, model_classifier)#140619# added img #img, config, model_rpn, model_classifier)
+        [bounding_boxes,  probabilities, ratio] = overhead.preprocess()#140619 img)#outputs preprocessed outputs
+        results = overhead.postprocess(bounding_boxes, probabilities, ratio)
+    print('Done')
+    exe_time= time.time()-tick
+    label = {"filePath":image_url,"predictionTuples":results,"inferencingTime":exe_time}
+    return flask.jsonify(label)
+
+@app.route('/b64-json-querry', methods=['POST'])#300619 @cmd try curl -X POST -F image=@{'img_data':'ac2a1ca5scab64'}.jpg 'http://localhost:8001/b64-json-querry'
+def querry_with_curl_json():
+    tick= time.time()
+    data= {}
+    
+    if request.method=='POST':
+        try:
+            data= request.get_json()['img_data']#this is to get jsonified base64 encoding of image
+        except:
+            return jsonify(status_code='400', msg= 'Bad Request')
+
+        data= base64.b64decode(data)#converts b64 incoming image to  binary data
+
+        img= Image.open(io.BytesIO(data))
+        img= img_to_array(img)#250619
+        img= img[...,::-1]#140619 changed RGB(happening with scipy) to BGR(recommended by cv2 locally)
+
+        global graph#270619
+    
+        with graph.as_default():
+            #creates an object from b_plat class, performing preprocessing
+            overhead = b_plate(img, config, model_rpn, model_classifier)#140619# added img #img, config, model_rpn, model_classifier)
+            [bounding_boxes,  probabilities, ratio] = overhead.preprocess()#140619 img)#outputs preprocessed outputs
+            results = overhead.postprocess(bounding_boxes, probabilities, ratio)
+        print('Done')
+        exe_time= time.time()-tick
+        label = {"filePath":str(request.files["image"]),"predictionTuples":results,"inferencingTime":exe_time}
+    return flask.jsonify(label)
 
 @app.route('/predict_button', methods=['POST'])
 def make_prediction_button():
@@ -186,14 +256,12 @@ def make_prediction_button():
         
         img= Image.open(io.BytesIO(file.read()))#250619
         img= img_to_array(img)#250619
-        #img= imread(file)#250619
         img= img[...,::-1]#140619 changed RGB(happening with scipy) to BGR(recommended by cv2 locally)
 
         if not file:
             return render_template('index.html', label="empty")
         with graph.as_default():
         #creates an object from b_plat class, performing preprocessing
-            #print('\n\ngraph imported as:', config, type(config))
             overhead = b_plate(img, config, model_rpn, model_classifier)#140619# added img #img, config, model_rpn, model_classifier)
             [bounding_boxes, probabilities, ratio] = overhead.preprocess()#140619 img)#outputs preprocessed outputs
             results = overhead.postprocess(bounding_boxes, probabilities, ratio)

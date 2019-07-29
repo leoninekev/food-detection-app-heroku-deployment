@@ -16,6 +16,53 @@ from keras.models import Model
 
 import resnet as nn#290519
 
+def format_img_size(image, config):
+    """ formats the image size based on config """
+    img_min_side = float(config['im_size'])
+    (height, width, _) = image.shape
+
+    if width <= height:
+        ratio = img_min_side / width
+        new_height = int(ratio * height)
+        new_width = int(img_min_side)
+    else:
+        ratio = img_min_side / height
+        new_width = int(ratio * width)
+        new_height = int(img_min_side)
+    image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+    return image, ratio
+
+
+def format_img_channels(image, config):
+    """ formats the image channels based on config """
+    image = image[:, :, (2, 1, 0)]
+    image = image.astype(np.float32)
+    image[:, :, 0] -= config['img_channel_mean'][0]
+    image[:, :, 1] -= config['img_channel_mean'][1]
+    image[:, :, 2] -= config['img_channel_mean'][2]
+    image /= config['img_scaling_factor']
+    image = np.transpose(image, (2, 0, 1))
+    image = np.expand_dims(image, axis=0)
+    return image
+
+
+def format_img(image, config):
+    """ formats an image for model prediction based on config """
+    image, ratio = format_img_size(image, config)
+    image = format_img_channels(image, config)
+    return image, ratio
+
+    # Method to transform the coordinates of the bounding box to its original size
+
+
+def get_real_coordinates(ratio, x1, y1, x2, y2):
+    real_x1 = int(round(x1 // ratio))
+    real_y1 = int(round(y1 // ratio))
+    real_x2 = int(round(x2 // ratio))
+    real_y2 = int(round(y2 // ratio))
+
+    return (real_x1, real_y1, real_x2, real_y2)
+
 app = Flask(__name__)
 @app.route("/")
 @app.route("/index")
@@ -28,50 +75,7 @@ def make_prediction():
         file = request.files['image']
         if not file:
             return render_template('index.html', label="empty")
-        img= imread(file)
-
-        def format_img_size(image, config):
-            """ formats the image size based on config """
-            img_min_side = float(config['im_size'])
-            (height, width, _) = image.shape
-
-            if width <= height:
-                ratio = img_min_side / width
-                new_height = int(ratio * height)
-                new_width = int(img_min_side)
-            else:
-                ratio = img_min_side / height
-                new_width = int(ratio * width)
-                new_height = int(img_min_side)
-            image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-            return image, ratio
-
-        def format_img_channels(image, config):
-            """ formats the image channels based on config """
-            image = image[:, :, (2, 1, 0)]
-            image = image.astype(np.float32)
-            image[:, :, 0] -= config['img_channel_mean'][0]
-            image[:, :, 1] -= config['img_channel_mean'][1]
-            image[:, :, 2] -= config['img_channel_mean'][2]
-            image /= config['img_scaling_factor']
-            image = np.transpose(image, (2, 0, 1))
-            image = np.expand_dims(image, axis=0)
-            return image
-
-        def format_img(image, config):
-            """ formats an image for model prediction based on config """
-            image, ratio = format_img_size(image, config)
-            image = format_img_channels(image, config)
-            return image, ratio
-
-        # Method to transform the coordinates of the bounding box to its original size
-        def get_real_coordinates(ratio, x1, y1, x2, y2):
-            real_x1 = int(round(x1 // ratio))
-            real_y1 = int(round(y1 // ratio))
-            real_x2 = int(round(x2 // ratio))
-            real_y2 = int(round(y2 // ratio))
-            return (real_x1, real_y1, real_x2, real_y2)
-        
+        img= imread(file)                
         config = {'verbose': True, 'network': 'resnet50', 'use_horizontal_flips': False,
                   'use_vertical_flips': False,
                   'rot_90': False, 'anchor_box_scales': [128, 256, 512],
@@ -92,6 +96,8 @@ def make_prediction():
 
         ####
         model_path = os.path.join(os.getcwd(), 'model_frcnn.hdf5')
+
+        print('\nmodel path is as:', model_path)
         num_features = 1024
         input_shape_img = (None, None, 3)
         input_shape_features = (None, None, num_features)
@@ -123,15 +129,16 @@ def make_prediction():
         #####
 
         X, ratio = format_img(img, config)
+        print('\nimage formatted, shape & ratios are as:', X.shape, ratio)
 
         if K.image_dim_ordering() == 'tf':
             X = np.transpose(X, (0, 2, 3, 1))
 
         # get the feature maps and output from the RPN
         [Y1, Y2, F] = model_rpn.predict(X)
-        
+        print('\n\nShape of predictions from model_rpn [Y1, Y2, F] is as:\n', [Y1.shape, Y2.shape, F.shape])
         R = roi_helpers.rpn_to_roi(Y1, Y2, config, K.image_dim_ordering(), overlap_thresh=0.7)
-
+        print('\n\nRPN to ROIs shape is as:\n',R.shape)
         # convert from (x1,y1,x2,y2) to (x,y,w,h)
         R[:, 2] -= R[:, 0]
         R[:, 3] -= R[:, 1]
@@ -139,10 +146,12 @@ def make_prediction():
         # apply the spatial pyramid pooling to the proposed regions
         bboxes = {}
         probs = {}
-
+        print('\nInitially, bboxes: {} & probs: {}'.format(bboxes,probs))
         bbox_threshold = 0.8
 
         for jk in range(R.shape[0] // config['num_rois'] + 1):
+            print('\n\nSTART OUTERLOOP! For {}th iteration'.format(jk))
+            print('\nNumber of Iterations for current loop: ',R.shape[0] // config['num_rois'] + 1)
             ROIs = np.expand_dims(R[config['num_rois'] * jk:config['num_rois'] * (jk + 1), :], axis=0)
             if ROIs.shape[1] == 0:
                 break
@@ -157,17 +166,22 @@ def make_prediction():
                 ROIs = ROIs_padded
 
             [P_cls, P_regr] = model_classifier.predict([F, ROIs])
-            
-            for ii in range(P_cls.shape[1]):
+            print('\nshape of P_cls:', P_cls.shape, '\nshape of P_regr:', P_regr.shape)
+            print('\nclass_mapping values: ', class_mapping)
 
+            for ii in range(P_cls.shape[1]):
+                print('\nInnerloop! For: {}/31 count; Probable class number is: {} ; With probability: {}'.format(ii, np.argmax(P_cls[0, ii, :]),np.max(P_cls[0, ii, :])))
                 if np.max(P_cls[0, ii, :]) < bbox_threshold or np.argmax(P_cls[0, ii, :]) == (P_cls.shape[2] - 1):
+                    print('Skipping! {}/31 ROI; Low confidence Or Irrelevant Class'.format(ii))
                     continue
 
                 cls_name = class_mapping[np.argmax(P_cls[0, ii, :])]
+                print('Voila! {ii}/31 ROI contains class: {}'.format(cls_name))
 
                 if cls_name not in bboxes:
                     bboxes[cls_name] = []
                     probs[cls_name] = []
+                print('\nbboxes and probs for: {} is {} & {}'.format(cls_name, bboxes, probs, bboxes)
 
                 (x, y, w, h) = ROIs[0, ii, :]
 
@@ -183,7 +197,11 @@ def make_prediction():
                     pass
                 bboxes[cls_name].append([config['rpn_stride']*x, config['rpn_stride']*y, config['rpn_stride']*(x + w),config['rpn_stride']*(y + h)])
                 probs[cls_name].append(np.max(P_cls[0, ii, :]))
-                
+                print('\nUpdated values after {}/31 ROI- For bboxes are: {}; For probs are: {}'.format(ii,bboxes,probs))
+            print('\n\n END! of ({}/10)th iteration of OUTERLOOP!\n'.format(jk))
+
+        print('\n\nEnd of Prediction loops!\n')
+        print('\nLength of bboxes: {}; length of probs: {};\nFinal values of bboxes: {}; And probs: {}'.format(len(bboxes), len(probs), bboxes, probs))
         all_dets = []
         for key in bboxes:
             bbox = np.array(bboxes[key])

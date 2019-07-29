@@ -46,22 +46,17 @@ def init():
                                trainable=True)
     model_rpn = Model(img_input, rpn_layers)
 
-    # model_classifier_only = Model([feature_map_input, roi_input], classifier)
     model_classifier = Model([feature_map_input, roi_input], classifier)
 
     ##########100619
     model_rpn.load_weights(model_path, by_name=True)
-    model_classifier.load_weights(model_path, by_name=True)
-
-
-
-
-
+    model_classifier.load_weights(model_path, by_name=True)    
     print("Loaded Model Weights from disk")
+    
     #compile and evaluate loaded model
     model_rpn.compile(optimizer='sgd', loss='mse')
     model_classifier.compile(optimizer='sgd', loss='mse')
 
     graph = tf.get_default_graph()
-    #graph = tf.get_default_graph()
-    return model_rpn, model_classifier, config, graph#110619 #loaded_model,graph
+    
+    return model_rpn, model_classifier, config, graph#110619
